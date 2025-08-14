@@ -6,7 +6,6 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-
 class TimeBatchNorm2d(nn.BatchNorm1d):
     """A batch normalization layer that normalizes over the last two dimensions of a
     sequence in PyTorch, mimicking Keras behavior.
@@ -293,6 +292,7 @@ class MixerLayer(nn.Module):
             dropout_rate,
             norm_type=norm_type,
         )
+
         self.feature_mixing = FeatureMixing(
             sequence_length,
             input_channels,

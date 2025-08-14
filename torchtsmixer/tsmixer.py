@@ -4,8 +4,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.utils.samformer_utils.revin import RevIN
+
 from .layers import MixerLayer, TimeBatchNorm2d, feature_to_time, time_to_feature
 
+import pdb
 
 class TSMixer(nn.Module):
     """TSMixer model for time series forecasting.
@@ -43,6 +46,7 @@ class TSMixer(nn.Module):
         ff_dim: int = 64,
         normalize_before: bool = True,
         norm_type: str = "batch",
+        use_revin: bool = False,
     ):
         super().__init__()
 
@@ -72,6 +76,9 @@ class TSMixer(nn.Module):
         # Temporal projection layer
         self.temporal_projection = nn.Linear(sequence_length, prediction_length)
 
+        self.revin = RevIN(num_features=input_channels)
+        self.use_revin = use_revin
+
     def _build_mixer(
         self, num_blocks: int, input_channels: int, output_channels: int, **kwargs
     ):
@@ -96,7 +103,7 @@ class TSMixer(nn.Module):
             ]
         )
 
-    def forward(self, x_hist: torch.Tensor) -> torch.Tensor:
+    def forward(self, x_hist: torch.Tensor, flatten_output=False) -> torch.Tensor:
         """Forward pass of the TSMixer model.
 
         Args:
@@ -105,13 +112,28 @@ class TSMixer(nn.Module):
         Returns:
             torch.Tensor: The output tensor after processing by the model.
         """
-        x = self.mixer_layers(x_hist)
+
+        # Taken from SAMFormer
+        if self.use_revin:
+            x_norm = self.revin(x_hist, mode="norm")  # (n, D, L)
+        else:
+            x_norm = x_hist
+
+        x = self.mixer_layers(x_norm)
 
         x_temp = feature_to_time(x)
         x_temp = self.temporal_projection(x_temp)
         x = time_to_feature(x_temp)
 
-        return x
+        # RevIN Denormalization
+        if self.use_revin:
+            x = self.revin(x, mode="denorm")  # (n, D, H)
+
+        # Added from samformer model for training loop
+        if flatten_output:
+            return x.reshape([x.shape[0], x.shape[1] * x.shape[2]])
+        else:
+            return x
 
 
 if __name__ == "__main__":
