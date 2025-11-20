@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.utils.samformer_utils.revin import RevIN
+
 from .layers import (
     ConditionalFeatureMixing,
     ConditionalMixerLayer,
@@ -53,6 +55,7 @@ class TSMixerExt(nn.Module):
         output_channels: int = None,
         normalize_before: bool = False,
         norm_type: str = "layer",
+        use_revin: bool = False,
     ):
         assert static_channels > 0, "static_channels must be greater than 0"
         super().__init__()
@@ -108,6 +111,9 @@ class TSMixerExt(nn.Module):
             norm_type=norm_type,
         )
 
+        self.revin = RevIN(num_features=input_channels)
+        self.use_revin = use_revin
+
     @staticmethod
     def _build_mixer(
         num_blocks: int, hidden_channels: int, prediction_length: int, **kwargs
@@ -133,6 +139,7 @@ class TSMixerExt(nn.Module):
         x_extra_hist: torch.Tensor,
         x_extra_future: torch.Tensor,
         x_static: torch.Tensor,
+        flatten_output=False,
     ) -> torch.Tensor:
         """Forward pass for the TSMixer model.
 
@@ -152,6 +159,12 @@ class TSMixerExt(nn.Module):
             The output tensor representing the forecast (batch_size, prediction_length,
             output_channels).
         """
+
+        # Taken from SAMFormer
+        if self.use_revin:
+            x_hist = self.revin(x_hist, mode="norm")  # (n, D, L)
+        else:
+            x_hist = x_hist
 
         # Concatenate historical time series data with additional historical data
         x_hist = torch.cat([x_hist, x_extra_hist], dim=-1)
@@ -177,7 +190,14 @@ class TSMixerExt(nn.Module):
         # Final linear transformation to produce the forecast
         x = self.fc_out(x)
 
-        return x
+        if self.use_revin:
+            x = self.revin(x.transpose(1, 2), mode="denorm").transpose(1, 2)
+
+        # Added from samformer model for training loop
+        if flatten_output:
+            return x.reshape([x.shape[0], x.shape[1] * x.shape[2]])
+        else:
+            return x
 
 
 if __name__ == "__main__":
@@ -198,11 +218,14 @@ if __name__ == "__main__":
         hidden_channels=hidden_channels,
         static_channels=static_channels,
         output_channels=output_channels,
+        use_revin=False,
     )
 
     x_hist = torch.randn(3, sequence_length, input_channels, requires_grad=True)
     x_extra_hist = torch.randn(3, sequence_length, extra_channels, requires_grad=True)
-    x_extra_future = torch.randn(3, prediction_length, extra_channels, requires_grad=True)
+    x_extra_future = torch.randn(
+        3, prediction_length, extra_channels, requires_grad=True
+    )
     x_static = torch.randn(3, static_channels, requires_grad=True)
 
     y = m.forward(
